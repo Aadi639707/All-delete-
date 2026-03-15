@@ -2,65 +2,60 @@ import os
 import asyncio
 from flask import Flask
 from threading import Thread
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, types
 
-# --- Flask Server for Render (Keep Alive) ---
+# --- Render Web Service Port Fix ---
 app = Flask('')
-
 @app.route('/')
-def home():
-    return "Bot is alive and running!"
-
-def run_flask():
-    # Render automatically assigns a PORT, default to 8080
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+def home(): return "Bot is Online"
 
 def keep_alive():
-    t = Thread(target=run_flask)
+    t = Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))))
     t.daemon = True
     t.start()
 
-# --- Telegram Bot Configuration ---
+# --- Bot Config ---
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# Initialize Client
-client = TelegramClient('deleter_session', API_ID, API_HASH)
+client = TelegramClient('auto_cleaner', API_ID, API_HASH)
 
-@client.on(events.ChatAction)
-async def handler(event):
-    # Check if the bot was added to a group or channel
-    if event.user_added or event.created or event.action_message:
-        me = await client.get_me()
-        if event.user_id == me.id:
-            print(f"✅ Added to Chat ID: {event.chat_id}. Cleaning started...")
-            
+async def delete_all_messages(chat_id):
+    print(f"🚀 Cleaning started in: {chat_id}")
+    try:
+        async for msg in client.iter_messages(chat_id):
             try:
-                # Optimized message deletion
-                async for msg in client.iter_messages(event.chat_id):
-                    try:
-                        await msg.delete()
-                    except Exception as e:
-                        # Log errors like FloodWait or lack of permission
-                        print(f"⚠️ Could not delete message: {e}")
-                print("🎯 Cleanup complete.")
+                await msg.delete()
+                await asyncio.sleep(0.5) # Flood wait se bachne ke liye thoda delay
             except Exception as e:
-                print(f"❌ Critical Error during deletion: {e}")
+                print(f"Skip: {e}")
+        print(f"✅ Full Cleanup Done in {chat_id}")
+    except Exception as e:
+        print(f"Error in {chat_id}: {e}")
+
+# Trigger: Jab bot ko Admin banaya jaye (Channel ya Group dono mein)
+@client.on(events.Raw)
+async def handler(update):
+    # Check if someone added the bot as admin or changed permissions
+    if isinstance(update, types.UpdateChannelParticipant):
+        me = await client.get_me()
+        if update.user_id == me.id:
+            # Check if bot is now an Admin
+            if isinstance(update.new_participant, (types.ChannelParticipantAdmin, types.ChannelParticipantCreator)):
+                await delete_all_messages(update.channel_id)
+
+# Command for Group (Back up option)
+@client.on(events.NewMessage(pattern='/delall'))
+async def group_manual(event):
+    await delete_all_messages(event.chat_id)
 
 async def main():
-    # Start the bot properly with awaiting
     await client.start(bot_token=BOT_TOKEN)
-    print("🤖 Bot is successfully logged in and monitoring...")
+    print("🤖 Bot Active: Channel/GC Deleter is Running!")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
-    keep_alive()  # Start Flask in a background thread
+    keep_alive()
+    asyncio.run(main())
     
-    # Modern way to run the async event loop without RuntimeError
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        pass
-        
